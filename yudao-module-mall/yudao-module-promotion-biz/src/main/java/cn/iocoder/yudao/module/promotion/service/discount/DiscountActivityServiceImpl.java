@@ -1,9 +1,13 @@
 package cn.iocoder.yudao.module.promotion.service.discount;
 
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.collection.CollectionUtil;
+import cn.hutool.core.util.ObjectUtil;
+import cn.iocoder.yudao.framework.common.enums.CommonStatusEnum;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.collection.CollectionUtils;
+import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
+import cn.iocoder.yudao.module.product.api.sku.ProductSkuApi;
+import cn.iocoder.yudao.module.product.api.sku.dto.ProductSkuRespDTO;
 import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityBaseVO;
 import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityCreateReqVO;
 import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityPageReqVO;
@@ -13,19 +17,21 @@ import cn.iocoder.yudao.module.promotion.dal.dataobject.discount.DiscountActivit
 import cn.iocoder.yudao.module.promotion.dal.dataobject.discount.DiscountProductDO;
 import cn.iocoder.yudao.module.promotion.dal.mysql.discount.DiscountActivityMapper;
 import cn.iocoder.yudao.module.promotion.dal.mysql.discount.DiscountProductMapper;
-import cn.iocoder.yudao.module.promotion.enums.common.PromotionActivityStatusEnum;
-import cn.iocoder.yudao.module.promotion.service.discount.bo.DiscountProductDetailBO;
-import cn.iocoder.yudao.module.promotion.util.PromotionUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 
 import javax.annotation.Resource;
-import java.util.*;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 
+import static cn.hutool.core.collection.CollUtil.intersectionDistinct;
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.framework.common.util.collection.CollectionUtils.*;
+import static cn.iocoder.yudao.framework.common.util.collection.MapUtils.findAndThen;
+import static cn.iocoder.yudao.module.product.enums.ErrorCodeConstants.SKU_NOT_EXISTS;
 import static cn.iocoder.yudao.module.promotion.enums.ErrorCodeConstants.*;
-import static java.util.Arrays.asList;
 
 /**
  * 限时折扣 Service 实现类
@@ -41,133 +47,152 @@ public class DiscountActivityServiceImpl implements DiscountActivityService {
     @Resource
     private DiscountProductMapper discountProductMapper;
 
-    @Override
-    public Map<Long, DiscountProductDetailBO> getMatchDiscountProducts(Collection<Long> skuIds) {
-        List<DiscountProductDetailBO> discountProducts = getRewardProductListBySkuIds(skuIds, singleton(PromotionActivityStatusEnum.RUN.getStatus()));
-        return convertMap(discountProducts, DiscountProductDetailBO::getSkuId);
-    }
+    @Resource
+    private ProductSkuApi productSkuApi;
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Long createDiscountActivity(DiscountActivityCreateReqVO createReqVO) {
         // 校验商品是否冲突
         validateDiscountActivityProductConflicts(null, createReqVO.getProducts());
+        // 校验商品是否存在
+        validateProductExists(createReqVO.getProducts());
 
         // 插入活动
         DiscountActivityDO discountActivity = DiscountActivityConvert.INSTANCE.convert(createReqVO)
-                .setStatus(PromotionUtils.calculateActivityStatus(createReqVO.getStartTime(), createReqVO.getEndTime()));
+                .setStatus(CommonStatusEnum.ENABLE.getStatus());
         discountActivityMapper.insert(discountActivity);
         // 插入商品
-        List<DiscountProductDO> discountProducts = convertList(createReqVO.getProducts(),
-                product -> DiscountActivityConvert.INSTANCE.convert(product).setActivityId(discountActivity.getId()));
+        List<DiscountProductDO> discountProducts = BeanUtils.toBean(createReqVO.getProducts(), DiscountProductDO.class,
+                product -> product.setActivityId(discountActivity.getId())
+                        .setActivityName(discountActivity.getName()).setActivityStatus(discountActivity.getStatus())
+                        .setActivityStartTime(createReqVO.getStartTime()).setActivityEndTime(createReqVO.getEndTime()));
         discountProductMapper.insertBatch(discountProducts);
         // 返回
         return discountActivity.getId();
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateDiscountActivity(DiscountActivityUpdateReqVO updateReqVO) {
         // 校验存在
         DiscountActivityDO discountActivity = validateDiscountActivityExists(updateReqVO.getId());
-        if (discountActivity.getStatus().equals(PromotionActivityStatusEnum.CLOSE.getStatus())) { // 已关闭的活动，不能修改噢
+        if (discountActivity.getStatus().equals(CommonStatusEnum.DISABLE.getStatus())) { // 已关闭的活动，不能修改噢
             throw exception(DISCOUNT_ACTIVITY_UPDATE_FAIL_STATUS_CLOSED);
         }
         // 校验商品是否冲突
         validateDiscountActivityProductConflicts(updateReqVO.getId(), updateReqVO.getProducts());
+        // 校验商品是否存在
+        validateProductExists(updateReqVO.getProducts());
 
         // 更新活动
-        DiscountActivityDO updateObj = DiscountActivityConvert.INSTANCE.convert(updateReqVO)
-                .setStatus(PromotionUtils.calculateActivityStatus(updateReqVO.getStartTime(), updateReqVO.getEndTime()));
+        DiscountActivityDO updateObj = DiscountActivityConvert.INSTANCE.convert(updateReqVO);
         discountActivityMapper.updateById(updateObj);
         // 更新商品
-        updateDiscountProduct(updateReqVO);
+        updateDiscountProduct(updateObj, updateReqVO.getProducts());
     }
 
-    private void updateDiscountProduct(DiscountActivityUpdateReqVO updateReqVO) {
-        List<DiscountProductDO> dbDiscountProducts = discountProductMapper.selectListByActivityId(updateReqVO.getId());
-        // 计算要删除的记录
-        List<Long> deleteIds = convertList(dbDiscountProducts, DiscountProductDO::getId,
-                discountProductDO -> updateReqVO.getProducts().stream()
-                        .noneMatch(product -> DiscountActivityConvert.INSTANCE.isEquals(discountProductDO, product)));
-        if (CollUtil.isNotEmpty(deleteIds)) {
-            discountProductMapper.deleteBatchIds(deleteIds);
+    private void updateDiscountProduct(DiscountActivityDO activity, List<DiscountActivityCreateReqVO.Product> products) {
+        // 第一步，对比新老数据，获得添加、修改、删除的列表
+        List<DiscountProductDO> newList = BeanUtils.toBean(products, DiscountProductDO.class,
+                product -> product.setActivityId(activity.getId())
+                        .setActivityName(activity.getName()).setActivityStatus(activity.getStatus())
+                        .setActivityStartTime(activity.getStartTime()).setActivityEndTime(activity.getEndTime()));
+        List<DiscountProductDO> oldList = discountProductMapper.selectListByActivityId(activity.getId());
+        List<List<DiscountProductDO>> diffList = CollectionUtils.diffList(oldList, newList, (oldVal, newVal) -> {
+            boolean same = ObjectUtil.equal(oldVal.getSkuId(), newVal.getSkuId());
+            if (same) {
+                newVal.setId(oldVal.getId());
+            }
+            return same;
+        });
+
+        // 第二步，批量添加、修改、删除
+        if (CollUtil.isNotEmpty(diffList.get(0))) {
+            discountProductMapper.insertBatch(diffList.get(0));
         }
-        // 计算新增的记录
-        List<DiscountProductDO> newDiscountProducts = convertList(updateReqVO.getProducts(),
-                product -> DiscountActivityConvert.INSTANCE.convert(product).setActivityId(updateReqVO.getId()));
-        newDiscountProducts.removeIf(product -> dbDiscountProducts.stream().anyMatch(
-                dbProduct -> DiscountActivityConvert.INSTANCE.isEquals(dbProduct, product))); // 如果匹配到，说明是更新的
-        if (CollectionUtil.isNotEmpty(newDiscountProducts)) {
-            discountProductMapper.insertBatch(newDiscountProducts);
+        if (CollUtil.isNotEmpty(diffList.get(1))) {
+            discountProductMapper.updateBatch(diffList.get(1));
+        }
+        if (CollUtil.isNotEmpty(diffList.get(2))) {
+            discountProductMapper.deleteByIds(convertList(diffList.get(2), DiscountProductDO::getId));
         }
     }
 
     /**
      * 校验商品是否冲突
      *
-     * @param id 编号
+     * @param id       编号
      * @param products 商品列表
      */
     private void validateDiscountActivityProductConflicts(Long id, List<DiscountActivityBaseVO.Product> products) {
-        if (CollUtil.isEmpty(products)) {
-            return;
+        // 1.1 查询所有开启的折扣活动
+        List<DiscountActivityDO> activityList = discountActivityMapper.selectList(DiscountActivityDO::getStatus,
+                CommonStatusEnum.ENABLE.getStatus());
+        if (id != null) { // 时排除自己
+            activityList.removeIf(item -> ObjectUtil.equal(item.getId(), id));
         }
-        // 查询商品参加的活动
-        List<DiscountProductDetailBO> discountActivityProductList = getRewardProductListBySkuIds(
-                convertSet(products, DiscountActivityBaseVO.Product::getSkuId),
-                asList(PromotionActivityStatusEnum.WAIT.getStatus(), PromotionActivityStatusEnum.RUN.getStatus()));
-        if (id != null) { // 排除自己这个活动
-            discountActivityProductList.removeIf(product -> id.equals(product.getActivityId()));
-        }
-        // 如果非空，则说明冲突
-        if (CollUtil.isNotEmpty(discountActivityProductList)) {
-            throw exception(DISCOUNT_ACTIVITY_SPU_CONFLICTS);
-        }
+        // 1.2 查询活动下的所有商品
+        List<DiscountProductDO> productList = discountProductMapper.selectListByActivityId(
+                convertList(activityList, DiscountActivityDO::getId));
+        Map<Long, List<DiscountProductDO>> productListMap = convertMultiMap(productList, DiscountProductDO::getActivityId);
+
+        // 2. 校验商品是否冲突
+        activityList.forEach(item -> {
+            findAndThen(productListMap, item.getId(), discountProducts -> {
+                if (!intersectionDistinct(convertList(discountProducts, DiscountProductDO::getSpuId),
+                        convertList(products, DiscountActivityBaseVO.Product::getSpuId)).isEmpty()) {
+                    throw exception(DISCOUNT_ACTIVITY_SPU_CONFLICTS, item.getName());
+                }
+            });
+        });
     }
 
-    private List<DiscountProductDetailBO> getRewardProductListBySkuIds(Collection<Long> skuIds,
-                                                                       Collection<Integer> statuses) {
-        // 查询商品
-        List<DiscountProductDO> products = discountProductMapper.selectListBySkuId(skuIds);
-        if (CollUtil.isEmpty(products)) {
-            return new ArrayList<>(0);
-        }
-
-        // 查询活动
-        List<DiscountActivityDO> activities = discountActivityMapper.selectBatchIds(skuIds);
-        activities.removeIf(activity -> !statuses.contains(activity.getStatus())); // 移除不满足 statuses 状态的
-        Map<Long, DiscountActivityDO> activityMap = CollectionUtils.convertMap(activities, DiscountActivityDO::getId);
-
-        // 移除不满足活动的商品
-        products.removeIf(product -> !activityMap.containsKey(product.getActivityId()));
-        return DiscountActivityConvert.INSTANCE.convertList(products, activityMap);
+    /**
+     * 校验活动商品是否都存在
+     *
+     * @param products 活动商品
+     */
+    private void validateProductExists(List<DiscountActivityBaseVO.Product> products) {
+        // 1.获得商品所有的 sku
+        List<ProductSkuRespDTO> skus = productSkuApi.getSkuListBySpuId(
+                convertList(products, DiscountActivityBaseVO.Product::getSpuId));
+        Map<Long, ProductSkuRespDTO> skuMap = convertMap(skus, ProductSkuRespDTO::getId);
+        // 2. 校验商品 sku 都存在
+        products.forEach(product -> {
+            if (!skuMap.containsKey(product.getSkuId())) {
+                throw exception(SKU_NOT_EXISTS);
+            }
+        });
     }
 
     @Override
-    public void closeRewardActivity(Long id) {
+    public void closeDiscountActivity(Long id) {
         // 校验存在
-        DiscountActivityDO dbDiscountActivity = validateDiscountActivityExists(id);
-        if (dbDiscountActivity.getStatus().equals(PromotionActivityStatusEnum.CLOSE.getStatus())) { // 已关闭的活动，不能关闭噢
+        DiscountActivityDO activity = validateDiscountActivityExists(id);
+        if (activity.getStatus().equals(CommonStatusEnum.DISABLE.getStatus())) { // 已关闭的活动，不能关闭噢
             throw exception(DISCOUNT_ACTIVITY_CLOSE_FAIL_STATUS_CLOSED);
         }
-        if (dbDiscountActivity.getStatus().equals(PromotionActivityStatusEnum.END.getStatus())) { // 已关闭的活动，不能关闭噢
-            throw exception(DISCOUNT_ACTIVITY_CLOSE_FAIL_STATUS_END);
-        }
 
-        // 更新
-        DiscountActivityDO updateObj = new DiscountActivityDO().setId(id).setStatus(PromotionActivityStatusEnum.CLOSE.getStatus());
-        discountActivityMapper.updateById(updateObj);
+        // 更新活动状态
+        discountActivityMapper.updateById(new DiscountActivityDO().setId(id).setStatus(CommonStatusEnum.DISABLE.getStatus()));
+        // 更新活动商品状态
+        discountProductMapper.updateByActivityId(new DiscountProductDO().setActivityId(id).setActivityStatus(
+                CommonStatusEnum.DISABLE.getStatus()));
     }
 
     @Override
     public void deleteDiscountActivity(Long id) {
         // 校验存在
-        DiscountActivityDO discountActivity = validateDiscountActivityExists(id);
-        if (!discountActivity.getStatus().equals(PromotionActivityStatusEnum.CLOSE.getStatus())) { // 未关闭的活动，不能删除噢
+        DiscountActivityDO activity = validateDiscountActivityExists(id);
+        if (CommonStatusEnum.isEnable(activity.getStatus())) { // 未关闭的活动，不能删除噢
             throw exception(DISCOUNT_ACTIVITY_DELETE_FAIL_STATUS_NOT_CLOSED);
         }
 
-        // 删除
+        // 删除活动
         discountActivityMapper.deleteById(id);
+        // 删除活动商品
+        discountProductMapper.deleteByActivityId(id);
     }
 
     private DiscountActivityDO validateDiscountActivityExists(Long id) {
@@ -191,6 +216,22 @@ public class DiscountActivityServiceImpl implements DiscountActivityService {
     @Override
     public List<DiscountProductDO> getDiscountProductsByActivityId(Long activityId) {
         return discountProductMapper.selectListByActivityId(activityId);
+    }
+
+    @Override
+    public List<DiscountProductDO> getDiscountProductsByActivityId(Collection<Long> activityIds) {
+        if (CollUtil.isEmpty(activityIds)) {
+            return CollUtil.newArrayList();
+        }
+        return discountProductMapper.selectList(DiscountProductDO::getActivityId, activityIds);
+    }
+
+    @Override
+    public List<DiscountProductDO> getMatchDiscountProductListBySkuIds(Collection<Long> skuIds) {
+        if (CollUtil.isEmpty(skuIds)) {
+            return CollUtil.newArrayList();
+        }
+        return discountProductMapper.selectListBySkuIdsAndStatusAndNow(skuIds, CommonStatusEnum.ENABLE.getStatus());
     }
 
 }

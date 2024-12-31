@@ -7,6 +7,7 @@ import lombok.ToString;
 
 import javax.validation.constraints.NotNull;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Schema(description = "管理后台 - 限时折扣活动 Response VO")
 @Data
@@ -14,14 +15,17 @@ import java.time.LocalDateTime;
 @ToString(callSuper = true)
 public class DiscountActivityRespVO extends DiscountActivityBaseVO {
 
-    @Schema(description = "活动编号", required = true, example = "1024")
+    @Schema(description = "活动编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1024")
     private Long id;
 
-    @Schema(description = "活动状态", required = true, example = "1")
+    @Schema(description = "活动状态", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
     @NotNull(message = "活动状态不能为空")
     private Integer status;
 
-    @Schema(description = "创建时间", required = true)
+    @Schema(description = "创建时间", requiredMode = Schema.RequiredMode.REQUIRED)
     private LocalDateTime createTime;
+
+    @Schema(description = "限时折扣商品", requiredMode = Schema.RequiredMode.REQUIRED)
+    private List<Product> products;
 
 }

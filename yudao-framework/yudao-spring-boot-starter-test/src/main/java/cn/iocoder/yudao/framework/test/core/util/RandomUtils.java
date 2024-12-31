@@ -55,6 +55,9 @@ public class RandomUtils {
             }
             return RandomUtil.randomInt();
         });
+        // LocalDateTime
+        PODAM_FACTORY.getStrategy().addOrReplaceTypeManufacturer(LocalDateTime.class,
+                (dataProviderStrategy, attributeMetadata, map) -> randomLocalDateTime());
         // Boolean
         PODAM_FACTORY.getStrategy().addOrReplaceTypeManufacturer(Boolean.class, (dataProviderStrategy, attributeMetadata, map) -> {
             // 如果是 deleted 的字段，返回非删除
@@ -82,7 +85,8 @@ public class RandomUtils {
     }
 
     public static LocalDateTime randomLocalDateTime() {
-        return LocalDateTimeUtil.of(randomDate());
+        // 设置 Nano 为零的原因，避免 MySQL、H2 存储不到时间戳
+        return LocalDateTimeUtil.of(randomDate()).withNano(0);
     }
 
     public static Short randomShort() {
@@ -100,6 +104,14 @@ public class RandomUtils {
 
     public static String randomEmail() {
         return randomString() + "@qq.com";
+    }
+
+    public static String randomMobile() {
+        return "13800138" + RandomUtil.randomNumbers(3);
+    }
+
+    public static String randomURL() {
+        return "https://www.iocoder.cn/" + randomString();
     }
 
     @SafeVarargs
@@ -125,6 +137,11 @@ public class RandomUtils {
     @SafeVarargs
     public static <T> List<T> randomPojoList(Class<T> clazz, Consumer<T>... consumers) {
         int size = RandomUtil.randomInt(1, RANDOM_COLLECTION_LENGTH);
+        return randomPojoList(clazz, size, consumers);
+    }
+
+    @SafeVarargs
+    public static <T> List<T> randomPojoList(Class<T> clazz, int size, Consumer<T>... consumers) {
         return Stream.iterate(0, i -> i).limit(size).map(o -> randomPojo(clazz, consumers))
                 .collect(Collectors.toList());
     }

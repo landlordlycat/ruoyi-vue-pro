@@ -37,8 +37,6 @@ mybatis:
 
 # Lock4j 配置项（单元测试，禁用 Lock4j）
 
-# Resilience4j 配置项
-
 --- #################### 监控相关配置 ####################
 
 --- #################### 芋道相关配置 ####################
@@ -51,3 +49,11 @@ yudao:
     order:
       app-id: 1
       merchant-order-id: 1
+    express:
+      kd-niao:
+        api-key: xxxx
+        business-id: xxxxx
+      kd100:
+        customer: xxxxx
+        key: xxxxx
+      client: not_provide

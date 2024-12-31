@@ -3,10 +3,10 @@ package cn.iocoder.yudao.module.pay.api.order.dto;
 import cn.iocoder.yudao.module.pay.enums.order.PayOrderStatusEnum;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 /**
  * 支付单信息 Response DTO
- *
- * TODO 芋艿：还没定好字段
  *
  * @author 芋道源码
  */
@@ -35,13 +35,18 @@ public class PayOrderRespDTO {
     /**
      * 支付金额，单位：分
      */
-    private Integer amount;
+    private Integer price;
     /**
      * 支付状态
      *
      * 枚举 {@link PayOrderStatusEnum}
      */
     private Integer status;
+
+    /**
+     * 订单支付成功时间
+     */
+    private LocalDateTime successTime;
 
     // ========== 渠道相关字段 ==========
 

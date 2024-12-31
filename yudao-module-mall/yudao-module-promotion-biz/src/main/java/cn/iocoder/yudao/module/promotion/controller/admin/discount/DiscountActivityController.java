@@ -1,8 +1,12 @@
 package cn.iocoder.yudao.module.promotion.controller.admin.discount;
 
+import cn.hutool.core.collection.CollUtil;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.*;
+import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityCreateReqVO;
+import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityPageReqVO;
+import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityRespVO;
+import cn.iocoder.yudao.module.promotion.controller.admin.discount.vo.DiscountActivityUpdateReqVO;
 import cn.iocoder.yudao.module.promotion.convert.discount.DiscountActivityConvert;
 import cn.iocoder.yudao.module.promotion.dal.dataobject.discount.DiscountActivityDO;
 import cn.iocoder.yudao.module.promotion.dal.dataobject.discount.DiscountProductDO;
@@ -19,6 +23,7 @@ import javax.validation.Valid;
 import java.util.List;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
+import static cn.iocoder.yudao.framework.common.util.collection.CollectionUtils.convertSet;
 
 @Tag(name = "管理后台 - 限时折扣活动")
 @RestController
@@ -49,7 +54,7 @@ public class DiscountActivityController {
     @Parameter(name = "id", description = "编号", required = true)
     @PreAuthorize("@ss.hasPermission('promotion:discount-activity:close')")
     public CommonResult<Boolean> closeRewardActivity(@RequestParam("id") Long id) {
-        discountActivityService.closeRewardActivity(id);
+        discountActivityService.closeDiscountActivity(id);
         return success(true);
     }
 
@@ -66,7 +71,7 @@ public class DiscountActivityController {
     @Operation(summary = "获得限时折扣活动")
     @Parameter(name = "id", description = "编号", required = true, example = "1024")
     @PreAuthorize("@ss.hasPermission('promotion:discount-activity:query')")
-    public CommonResult<DiscountActivityDetailRespVO> getDiscountActivity(@RequestParam("id") Long id) {
+    public CommonResult<DiscountActivityRespVO> getDiscountActivity(@RequestParam("id") Long id) {
         DiscountActivityDO discountActivity = discountActivityService.getDiscountActivity(id);
         if (discountActivity == null) {
             return success(null);
@@ -81,7 +86,14 @@ public class DiscountActivityController {
     @PreAuthorize("@ss.hasPermission('promotion:discount-activity:query')")
     public CommonResult<PageResult<DiscountActivityRespVO>> getDiscountActivityPage(@Valid DiscountActivityPageReqVO pageVO) {
         PageResult<DiscountActivityDO> pageResult = discountActivityService.getDiscountActivityPage(pageVO);
-        return success(DiscountActivityConvert.INSTANCE.convertPage(pageResult));
+        if (CollUtil.isEmpty(pageResult.getList())) {
+            return success(PageResult.empty(pageResult.getTotal()));
+        }
+
+        // 拼接数据
+        List<DiscountProductDO> products = discountActivityService.getDiscountProductsByActivityId(
+                convertSet(pageResult.getList(), DiscountActivityDO::getId));
+        return success(DiscountActivityConvert.INSTANCE.convertPage(pageResult, products));
     }
 
 }

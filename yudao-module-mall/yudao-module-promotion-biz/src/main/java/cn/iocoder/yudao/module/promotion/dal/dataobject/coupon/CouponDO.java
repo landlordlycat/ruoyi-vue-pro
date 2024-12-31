@@ -8,6 +8,7 @@ import cn.iocoder.yudao.module.promotion.enums.coupon.CouponStatusEnum;
 import cn.iocoder.yudao.module.promotion.enums.coupon.CouponTakeTypeEnum;
 import com.baomidou.mybatisplus.annotation.KeySequence;
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -30,13 +31,14 @@ public class CouponDO extends BaseDO {
     /**
      * 优惠劵编号
      */
+    @TableId
     private Long id;
     /**
      * 优惠劵模板编号
      *
      * 关联 {@link CouponTemplateDO#getId()}
      */
-    private Integer templateId;
+    private Long templateId;
     /**
      * 优惠劵名
      *
@@ -49,6 +51,8 @@ public class CouponDO extends BaseDO {
      * 枚举 {@link CouponStatusEnum}
      */
     private Integer status;
+
+    // TODO 芋艿：发放 adminid？
 
     // ========== 基本信息 END ==========
 
@@ -89,12 +93,12 @@ public class CouponDO extends BaseDO {
      */
     private Integer productScope;
     /**
-     * 商品 SPU 编号的数组
+     * 商品范围编号的数组
      *
-     * 冗余 {@link CouponTemplateDO#getProductSpuIds()}
+     * 冗余 {@link CouponTemplateDO#getProductScopeValues()}
      */
     @TableField(typeHandler = LongListTypeHandler.class)
-    private List<Long> productSpuIds;
+    private List<Long> productScopeValues;
     // ========== 使用规则 END ==========
 
     // ========== 使用效果 BEGIN ==========
